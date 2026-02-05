@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+models/models_compressed/
+*.bam
+.vs/
+.vscode/
+.idea/
+worlds/
+*.json
+!README.md
