@@ -6,6 +6,8 @@ import json
 import os
 
 app = Ursina()
+window.title = 'BeboCraft'
+window.icon = 'textures/logo.ico'
 player = FirstPersonController(position=(10, 6, 10), mouse_sensitivity=(100, 100))
 player.enabled = False # Start disabled for menu
 
@@ -27,6 +29,7 @@ held_item = Entity(
 
 # Health system
 health = 10
+user_spawn_point = (10, 6, 10)
 hearts = []
 for i in range(health):
     heart = Entity(
@@ -150,8 +153,8 @@ class Zombie(Entity):
             destroy(self)
 
 # Spawning state
-game_timer = 0
-zombie_spawned = False
+current_wave = 0
+night_spawn_active = False
 
 # Block Breaking State
 breaking_pos = None
@@ -176,7 +179,7 @@ last_held_tex = None
 
 # Inventory system
 # Inventory Data (0-4: Hotbar, 5-29: Main Inventory)
-inventory = [{'texture': 'grass.png', 'count': 64}] + [None] * 29
+inventory = [{'texture': 'grass.png', 'count': 64}, {'texture': 'spawn_point.png', 'count': 64}] + [None] * 28
 selected_slot = 0
 inventory_slots = []
 inventory_icons = []
@@ -246,7 +249,8 @@ STACK_LIMITS = {
     'iron_sword.png': 1, 'iron_shovel.png': 1, 'diamond_ore.png': 64, 'diamond.png': 64,
     'iron_helmet.png': 1, 'iron_chestplate.png': 1, 'iron_leggings.png': 1, 'iron_boots.png': 1,
     'diamond_pickaxe.png': 1, 'diamond_axe.png': 1, 'diamond_sword.png': 1, 'diamond_shovel.png': 1,
-    'diamond_helmet.png': 1, 'diamond_chestplate.png': 1, 'diamond_leggings.png': 1, 'diamond_boots.png': 1
+    'diamond_helmet.png': 1, 'diamond_chestplate.png': 1, 'diamond_leggings.png': 1, 'diamond_boots.png': 1,
+    'spawn_point.png': 64
 }
 
 def get_max_stack(texture):
@@ -530,7 +534,12 @@ def input(key):
                     new_pos = hit_info.world_point + hit_info.normal * 0.5
                     new_pos = (math.floor(new_pos[0]), math.floor(new_pos[1]), math.floor(new_pos[2]))
                     
-                    world.add_block(new_pos, inventory[selected_slot]['texture'])
+                    tex = inventory[selected_slot]['texture']
+                    world.add_block(new_pos, tex)
+                    
+                    if tex == 'spawn_point.png':
+                        global user_spawn_point
+                        user_spawn_point = (new_pos[0], new_pos[1] + 1, new_pos[2])
                     
                     inventory[selected_slot]['count'] -= 1
                     if inventory[selected_slot]['count'] <= 0:
@@ -1056,18 +1065,58 @@ update_timer = 0 # Timer to throttle heavy operations
 fps_text = Text(position=(0.75, 0.45), scale=1, origin=(0,0), color=color.black)
 entity_count_text = Text(position=(0.75, 0.42), scale=1, origin=(0,0), color=color.black)
 
+def spawn_wave(count):
+    for i in range(count):
+        # Spawn zombie at a distance (20-30 units away)
+        angle = random.uniform(0, math.pi * 2)
+        dist = random.uniform(20, 30)
+        spawn_pos = player.position + Vec3(math.cos(angle) * dist, 0, math.sin(angle) * dist)
+        # Ensure it's on ground level (y=1 based on Zombie class)
+        spawn_pos.y = 1
+        Zombie(position=spawn_pos)
+    print(f"Wave {current_wave}: {count} Zombies appeared!")
+
 def update():
     global health, last_y, is_falling, fall_start_y, regen_timer, selected_slot, update_timer, cursor_item, last_held_tex
-    global is_breaking, breaking_timer, breaking_pos, game_timer, zombie_spawned
+    global is_breaking, breaking_timer, breaking_pos
+    global current_wave, night_spawn_active
     
-    # Game Timer and Zombie Spawning
-    game_timer += time.dt
-    if game_timer >= 90 and not zombie_spawned:
-        zombie_spawned = True
-        # Spawn zombie at a distance
-        spawn_pos = player.position + Vec3(random.uniform(10, 20), 0, random.uniform(10, 20))
-        Zombie(position=spawn_pos)
-        print("A Zombie has appeared!")
+    # Day/Night Detection and Zombie Spawning
+    if player.enabled:
+        angle = sun.rotation_x % 360
+        is_night = angle >= 180
+        
+        if is_night:
+            if not night_spawn_active:
+                # Transition to night: Start Wave 1
+                night_spawn_active = True
+                current_wave = 1
+                spawn_wave(2)
+            else:
+                # Check if current wave is cleared to spawn next wave
+                if 1 <= current_wave <= 2:
+                    active_zombies = [e for e in scene.entities if isinstance(e, Zombie)]
+                    if len(active_zombies) == 0:
+                        if current_wave == 1:
+                            current_wave = 2
+                            spawn_wave(3)
+                        elif current_wave == 2:
+                            current_wave = 3
+                            spawn_wave(5)
+                elif current_wave == 3:
+                    active_zombies = [e for e in scene.entities if isinstance(e, Zombie)]
+                    if len(active_zombies) == 0:
+                        current_wave = 4 # All waves done for this night
+                        print("All night waves cleared!")
+        else:
+            # It's day
+            if night_spawn_active:
+                # Transition to day: Reset for next night
+                night_spawn_active = False
+                current_wave = 0
+                # Optional: destroy remaining zombies during day (they should burn)
+                for z in [e for e in scene.entities if isinstance(e, Zombie)]:
+                    destroy(z)
 
     # Handle Block Breaking
     if is_breaking:
@@ -1347,7 +1396,7 @@ def take_damage(amount):
 
 def respawn():
     global health
-    player.position = (10, 6, 10)
+    player.position = user_spawn_point
     health = 10
     update_health_ui()
 
@@ -1663,9 +1712,9 @@ def upgrade_world_file(name):
     
     # 0. Cave Definition
     cave_centers = []
-    for _ in range(25):
-        cx, cy, cz = random.randint(0, 59), random.randint(-15, -4), random.randint(0, 59)
-        cr = random.uniform(2, 6)
+    for _ in range(40):
+        cx, cy, cz = random.randint(0, 59), random.randint(-15, 2), random.randint(0, 59)
+        cr = random.uniform(2, 5)
         # Bounding box for cave
         cave_centers.append({
             'c': (cx, cy, cz), 'r': cr, 'r_sq': cr**2,
@@ -1683,19 +1732,22 @@ def upgrade_world_file(name):
 
     added_count = 0
     # 1. Expand (60x60)
-    # We only need to check coordinates that could be new. 
-    # Old world was 40x40.
     for z in range(60):
         for x in range(60):
-            # If in the new area OR we are checking depths that might have been skipped?
-            # Actually, let's just keep the loop simple but optimize the checks.
+            # Surface
             if (x, 0, z) not in pos_set:
-                voxels.append({'pos': [x, 0, z], 'tex': 'grass.png'})
-                added_count += 1
+                if not is_in_cave(x, 0, z):
+                    voxels.append({'pos': [x, 0, z], 'tex': 'grass.png'})
+                    added_count += 1
+                elif random.random() < 0.05:
+                    voxels.append({'pos': [x, 0, z], 'tex': 'iron_ore.png'})
+                    added_count += 1
             
+            # Subsurface
             for y in range(-1, -17, -1):
                 if (x, y, z) not in pos_set:
-                    if not is_in_cave(x, y, z):
+                    in_cave = is_in_cave(x, y, z)
+                    if not in_cave:
                         if y >= -2: tex = 'dirt.png'
                         else:
                             tex = 'stone.png'
@@ -1704,6 +1756,19 @@ def upgrade_world_file(name):
                             elif r < 0.07: tex = 'iron_ore.png'
                         voxels.append({'pos': [x, y, z], 'tex': tex})
                         added_count += 1
+                    else:
+                        # Cave ores
+                        r = random.random()
+                        if y <= -3:
+                            if r < 0.01: 
+                                voxels.append({'pos': [x, y, z], 'tex': 'diamond_ore.png'})
+                                added_count += 1
+                            elif r < 0.04:
+                                voxels.append({'pos': [x, y, z], 'tex': 'iron_ore.png'})
+                                added_count += 1
+                        elif r < 0.02:
+                            voxels.append({'pos': [x, y, z], 'tex': 'iron_ore.png'})
+                            added_count += 1
     
     # 2. Add trees for expansion
     tree_spots = [(5, 5), (15, 15), (10, 15), (25, 10), (30, 30), (35, 5), (5, 35), (20, 25),
@@ -1742,9 +1807,9 @@ def upgrade_world_file(name):
 def generate_base_world():
     # 0. Cave Definition
     cave_centers = []
-    for _ in range(25):
-        cx, cy, cz = random.randint(0, 59), random.randint(-15, -4), random.randint(0, 59)
-        cr = random.uniform(2, 6)
+    for _ in range(40): # More caves for better connectivity
+        cx, cy, cz = random.randint(0, 59), random.randint(-15, 2), random.randint(0, 59)
+        cr = random.uniform(2, 5)
         cave_centers.append({
             'c': (cx, cy, cz), 'r_sq': cr**2,
             'bbox': (cx-cr, cx+cr, cy-cr, cy+cr, cz-cr, cz+cr)
@@ -1763,23 +1828,40 @@ def generate_base_world():
     for i in range(60):
         for j in range(60):
             # Surface
-            world.add_block((j, 0, i), 'grass.png', sync=False)
+            # Punch holes in surface for cave entrances
+            if not is_in_cave(j, 0, i):
+                world.add_block((j, 0, i), 'grass.png', sync=False)
+            elif is_in_cave(j, 0, i) and random.random() < 0.05:
+                # Occasional floating ore in entrance
+                world.add_block((j, 0, i), 'iron_ore.png', sync=False)
             
             # Dirt
             for y in [-1, -2]:
-                if not is_in_cave(j, y, i):
+                in_cave = is_in_cave(j, y, i)
+                if not in_cave:
                     world.add_block((j, y, i), 'dirt.png', sync=False)
+                elif in_cave and random.random() < 0.02:
+                     # Rare cave ore in dirt layer
+                     world.add_block((j, y, i), 'iron_ore.png', sync=False)
             
             # Stone
             for y in range(-3, -17, -1):
-                if not is_in_cave(j, y, i):
+                in_cave = is_in_cave(j, y, i)
+                if not in_cave:
                     tex = 'stone.png'
                     r = random.random()
                     if r < 0.02: # 2% chance of diamond ore
                         tex = 'diamond_ore.png'
-                    elif r < 0.07: # 5% chance of iron ore (0.02 + 0.05)
+                    elif r < 0.07: # 5% chance of iron ore
                         tex = 'iron_ore.png'
                     world.add_block((j, y, i), tex, sync=False)
+                elif in_cave:
+                    # Sparse ores "floating" or on cave walls
+                    r = random.random()
+                    if r < 0.01: # 1% diamond inside cave
+                        world.add_block((j, y, i), 'diamond_ore.png', sync=False)
+                    elif r < 0.04: # 3% iron inside cave
+                        world.add_block((j, y, i), 'iron_ore.png', sync=False)
 
     def create_tree(x, z):
         for y in range(1, 5):
