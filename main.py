@@ -1114,9 +1114,17 @@ def update():
                 # Transition to day: Reset for next night
                 night_spawn_active = False
                 current_wave = 0
-                # Optional: destroy remaining zombies during day (they should burn)
-                for z in [e for e in scene.entities if isinstance(e, Zombie)]:
-                    destroy(z)
+                # Burn remaining zombies during day
+                zombies = [e for e in scene.entities if isinstance(e, Zombie)]
+                if zombies:
+                    print(f"Sun has risen! {len(zombies)} zombies are burning.")
+                    for z in zombies:
+                        # Spawn fire-like particles
+                        for _ in range(8):
+                            p = Particle(position=z.position + Vec3(random.uniform(-0.3, 0.3), 1, random.uniform(-0.3, 0.3)), texture='heart.png')
+                            p.color = color.orange
+                            p.scale = 0.08
+                        destroy(z)
 
     # Handle Block Breaking
     if is_breaking:
@@ -1295,9 +1303,12 @@ def update():
     
     # Day/Night Cycle (Throttle to run every few frames)
     if update_timer > 0.1:
-        # Sun rotation
-        sun.rotation_x += update_timer * 6 
-        if sun.rotation_x > 360: sun.rotation_x = 0
+        # Sun rotation speed: Day is slower (2), Night is faster (6)
+        angle = sun.rotation_x % 360
+        rotation_speed = 2 if angle < 180 else 6
+        
+        sun.rotation_x += update_timer * rotation_speed
+        if sun.rotation_x > 360: sun.rotation_x %= 360
         
         angle = sun.rotation_x % 360
         if angle < 180: # Day
